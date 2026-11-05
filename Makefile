@@ -1,10 +1,21 @@
-.PHONY: build test generate migration-create migrate migrate-up migrate-down migrate-status run docker-up docker-down connect
+.PHONY: build test test-integration lint fmt generate migration-create migrate migrate-up migrate-down migrate-status run docker-up docker-down connect
 
 build:
 	go build ./...
 
 test:
-	go test -race ./...
+	@coverage=$$(mktemp); trap 'rm -f "$$coverage"' EXIT; \
+	go test -race -count=2 -coverpkg=./internal/domain/...,./internal/usecase/... -coverprofile="$$coverage" ./... && \
+	go tool cover -func="$$coverage" | tail -1
+
+test-integration:
+	@set -a; . ./.env && TEST_DATABASE_URL="$${TEST_DATABASE_URL:-$$DATABASE_URL}" go test -race -count=2 -tags=integration ./internal/repository/...
+
+lint:
+	golangci-lint run ./...
+
+fmt:
+	golangci-lint fmt ./...
 
 docker-up:
 	tripgoctl cluster start
@@ -34,6 +45,7 @@ migrate-status:
 generate:
 	mkdir -p internal/generated
 	go tool oapi-codegen -generate types,chi-server -include-operation-ids createTrip,getTrip,finishTrip,health,ready -package api -o internal/generated/api.gen.go contracts/openapi/trip-service.openapi.yaml
+	go generate ./internal/...
 
 run:
-	@set -a; . ./.env && go run ./cmd/trip-service
+	@set -a; . ./config/service.env && . ./.env && go run ./cmd/trip-service

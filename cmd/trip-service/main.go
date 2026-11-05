@@ -3,76 +3,64 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/makkssik/template/internal/app"
 	"github.com/makkssik/template/internal/config"
-	historypg "github.com/makkssik/template/internal/domain/trip_status_history/repositories/pg"
-	tripspg "github.com/makkssik/template/internal/domain/trips/repositories/pg"
-	"github.com/makkssik/template/internal/postgres"
-	checkupservice "github.com/makkssik/template/internal/service/checkup"
-	historyservice "github.com/makkssik/template/internal/service/trip_status_history"
-	tripsservice "github.com/makkssik/template/internal/service/trips"
+	"github.com/makkssik/template/internal/container"
 )
 
 func main() {
+	ctx := context.Background()
+	if err := run(ctx); err != nil {
+		container.LogError(ctx, err)
+		os.Exit(1)
+	}
+}
+
+func run(parent context.Context) error {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := postgres.NewPool(ctx, cfg)
+	application, err := container.New(ctx, cfg)
 	if err != nil {
-		log.Fatalf("connect database: %v", err)
+		return fmt.Errorf("build application: %w", err)
 	}
-
-	historyService := historyservice.NewService(historyservice.ServiceCfg{
-		StatusHistoryRepository: historypg.NewPostgresqlRepository(pool, cfg.DatabaseQueryTimeout),
-	})
-	tripsService := tripsservice.NewService(tripsservice.ServiceCfg{
-		TripsRepository:         tripspg.NewPostgresqlRepository(pool, cfg.DatabaseQueryTimeout),
-		StatusHistoryRepository: historyService,
-		TxManager:               postgres.NewTxManager(pool, cfg.DatabaseQueryTimeout),
-	})
-
-	checkupService := checkupservice.NewService(checkupservice.ServiceCfg{
-		Database:     pool,
-		QueryTimeout: cfg.DatabaseQueryTimeout,
-	})
-	implementation := app.New(app.ImplementationConfig{
-		TripsService:   tripsService,
-		CheckupService: checkupService,
-	})
-	server := app.NewServer(cfg, implementation)
+	pool, server := application.Pool, application.Server
 	serverErrors := make(chan error, 1)
 
 	go func() {
 		serverErrors <- server.ListenAndServe()
 	}()
-	log.Printf("starting HTTP server on %s", cfg.HTTPAddr)
+	application.Logger.InfoContext(ctx, "service started", "http_addr", cfg.HTTPAddr)
 
 	var serverErr error
 	select {
 	case <-ctx.Done():
-		log.Print("stopping service")
+		application.Logger.InfoContext(ctx, "service stopping")
 	case serverErr = <-serverErrors:
 	}
 	stop()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), cfg.ShutdownTimeout)
 	defer cancel()
 
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("shutdown HTTP server, forcing exit: %v", err)
+	shutdownErr := server.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		shutdownErr = errors.Join(shutdownErr, server.Close())
 	}
 
+	if err := application.Telemetry.Shutdown(shutdownCtx); err != nil {
+		application.Logger.WarnContext(shutdownCtx, "shutdown telemetry", "error", err)
+	}
 	poolClosed := make(chan struct{})
 	go func() {
 		pool.Close()
@@ -82,11 +70,15 @@ func main() {
 	select {
 	case <-poolClosed:
 	case <-shutdownCtx.Done():
-		log.Fatalf("shutdown timeout, forcing exit: %v", shutdownCtx.Err())
+		return fmt.Errorf("shutdown timeout, forcing exit: %w", errors.Join(shutdownCtx.Err(), shutdownErr))
+	}
+	if shutdownErr != nil {
+		return fmt.Errorf("shutdown HTTP server: %w", shutdownErr)
 	}
 
 	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
-		log.Fatalf("serve HTTP: %v", serverErr)
+		return fmt.Errorf("serve HTTP: %w", serverErr)
 	}
-	log.Print("service stopped")
+	application.Logger.InfoContext(shutdownCtx, "service stopped")
+	return nil
 }
