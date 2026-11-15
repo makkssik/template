@@ -36,9 +36,11 @@ func WriteProblem(logger *slog.Logger, w http.ResponseWriter, r *http.Request, s
 }
 
 func writeProblem(logger *slog.Logger, w http.ResponseWriter, r *http.Request, problem api.Problem) {
-	span := trace.SpanFromContext(r.Context())
-	span.SetStatus(codes.Error, problem.Code)
-	span.SetAttributes(attribute.String("error.type", problem.Code))
+	if problem.Status >= http.StatusInternalServerError {
+		span := trace.SpanFromContext(r.Context())
+		span.SetStatus(codes.Error, problem.Code)
+		span.SetAttributes(attribute.String("error.type", problem.Code))
+	}
 	instance := r.URL.Path
 	problem.Instance = &instance
 

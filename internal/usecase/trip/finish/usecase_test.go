@@ -14,8 +14,14 @@ import (
 )
 
 func TestOperation(t *testing.T) {
-	const completedStage = "completed"
-	for _, stage := range []string{"success", "load", "save", "history", "transaction", "commit", completedStage, "missing"} {
+	const (
+		saveStage        = "save"
+		successStage     = "success"
+		transactionStage = "transaction"
+		missingStage     = "missing"
+		completedStage   = "completed"
+	)
+	for _, stage := range []string{successStage, "load", saveStage, "history", transactionStage, "commit", completedStage, missingStage} {
 		t.Run(stage, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			repo := NewMocktripRepository(ctrl)
@@ -28,9 +34,9 @@ func TestOperation(t *testing.T) {
 			switch stage {
 			case completedStage:
 				wantErr = trip.ErrTripCompleted
-			case "missing":
+			case missingStage:
 				wantErr = trip.ErrTripNotFound
-			case "success":
+			case successStage:
 			default:
 				wantErr = failure
 			}
@@ -51,7 +57,7 @@ func TestOperation(t *testing.T) {
 			type transactionKey struct{}
 			txCtx := context.WithValue(t.Context(), transactionKey{}, true)
 			tx.EXPECT().Do(t.Context(), gomock.Any()).DoAndReturn(func(_ context.Context, fn func(context.Context) error) error {
-				if stage == "transaction" {
+				if stage == transactionStage {
 					return failure
 				}
 				if err := fn(txCtx); err != nil {
@@ -63,16 +69,16 @@ func TestOperation(t *testing.T) {
 				committed = true
 				return nil
 			})
-			if stage != "transaction" {
+			if stage != transactionStage {
 				var loadErr error
-				if stage == "load" || stage == "missing" {
+				if stage == "load" || stage == missingStage {
 					loadErr = wantErr
 				}
 				load := repo.EXPECT().GetTripForUpdate(txCtx, id).Return(&loaded, loadErr)
 				if loadErr == nil && stage != completedStage {
 					save := repo.EXPECT().SaveTrip(txCtx, gomock.Any()).After(load).DoAndReturn(func(_ context.Context, value trip.Trip) (*trip.Trip, error) {
 						assertFinishedTrip(t, before, value)
-						if stage == "save" {
+						if stage == saveStage {
 							return nil, failure
 						}
 						// Model database timestamp precision and ensure the persisted value is returned.
@@ -81,7 +87,7 @@ func TestOperation(t *testing.T) {
 						saved.FinishedAt, saved.UpdatedAt = &at, at
 						return &saved, nil
 					})
-					if stage != "save" {
+					if stage != saveStage {
 						history.EXPECT().RegisterStatusChange(txCtx, gomock.Any()).After(save).DoAndReturn(func(_ context.Context, change trip.StatusChange) error {
 							assertHistory(t, change, before, saved)
 							if stage == "history" {
@@ -92,7 +98,7 @@ func TestOperation(t *testing.T) {
 					}
 				}
 			}
-			if stage == "success" {
+			if stage == successStage {
 				observer.EXPECT().Completed(t.Context(), id).Do(func(context.Context, uuid.UUID) {
 					if !committed {
 						t.Fatal("completion event emitted before commit")

@@ -1,4 +1,4 @@
-package pg
+package trip
 
 import (
 	"time"
@@ -27,6 +27,11 @@ type Trip struct {
 }
 
 func dbToDomain(m Trip) trips.Trip {
+	var finishedAt *time.Time
+	if m.FinishedAt != nil {
+		at := m.FinishedAt.UTC()
+		finishedAt = &at
+	}
 	return trips.Trip{
 		TripID:   m.TripID,
 		UserID:   m.UserID,
@@ -41,9 +46,9 @@ func dbToDomain(m Trip) trips.Trip {
 		},
 		Price:      m.Price,
 		Status:     trips.Status(m.Status),
-		StartedAt:  m.StartedAt,
-		FinishedAt: m.FinishedAt,
-		CreatedAt:  m.CreatedAt,
-		UpdatedAt:  m.UpdatedAt,
+		StartedAt:  m.StartedAt.UTC(),
+		FinishedAt: finishedAt,
+		CreatedAt:  m.CreatedAt.UTC(),
+		UpdatedAt:  m.UpdatedAt.UTC(),
 	}
 }

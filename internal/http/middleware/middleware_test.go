@@ -229,6 +229,7 @@ func assertHTTPSpan(t *testing.T, exporter *tracetest.InMemoryExporter, method, 
 }
 
 func TestResponsesPreservedAndRecorded(t *testing.T) {
+	const createTripRoute = "/api/v1/trips"
 	for _, tc := range []struct {
 		status int
 		method string
@@ -237,8 +238,8 @@ func TestResponsesPreservedAndRecorded(t *testing.T) {
 		body   string
 	}{
 		{http.StatusOK, http.MethodGet, tripRoute, tripPath, `{"status":"active"}`},
-		{http.StatusCreated, http.MethodPost, "/api/v1/trips", "/api/v1/trips", `{"status":"active"}`},
-		{http.StatusBadRequest, http.MethodPost, "/api/v1/trips", "/api/v1/trips", `{"code":"invalid_request"}`},
+		{http.StatusCreated, http.MethodPost, createTripRoute, createTripRoute, `{"status":"active"}`},
+		{http.StatusBadRequest, http.MethodPost, createTripRoute, createTripRoute, `{"code":"invalid_request"}`},
 		{http.StatusNotFound, http.MethodGet, tripRoute, tripPath, `{"code":"trip_not_found"}`},
 		{http.StatusConflict, http.MethodPost, tripRoute + "/finish", tripPath + "/finish", `{"code":"trip_completed"}`},
 		{http.StatusInternalServerError, http.MethodGet, tripRoute, tripPath, `{"code":"internal_error"}`},
@@ -329,7 +330,12 @@ func chain(next http.Handler, logger *slog.Logger, tp trace.TracerProvider, metr
 }
 
 func TestMiddlewareWorksIndependently(t *testing.T) {
-	for _, name := range []string{"logging", "metrics", "tracing", "recover"} {
+	const (
+		loggingMiddleware = "logging"
+		metricsMiddleware = "metrics"
+		tracingMiddleware = "tracing"
+	)
+	for _, name := range []string{loggingMiddleware, metricsMiddleware, tracingMiddleware, "recover"} {
 		t.Run(name, func(t *testing.T) {
 			signals := newTestTelemetry(t)
 			metrics, err := middleware.NewMetrics(signals.meter.Meter("test"))
@@ -343,11 +349,11 @@ func TestMiddlewareWorksIndependently(t *testing.T) {
 				w.WriteHeader(http.StatusCreated)
 			})
 			switch name {
-			case "logging":
+			case loggingMiddleware:
 				handler = middleware.Logging(handler, logger, route)
-			case "metrics":
+			case metricsMiddleware:
 				handler = middleware.Metrics(handler, metrics, route)
-			case "tracing":
+			case tracingMiddleware:
 				handler = middleware.Tracing(handler, signals.tracer, route)
 			case "recover":
 				handler = middleware.Recover(handler, logger)
@@ -360,13 +366,13 @@ func TestMiddlewareWorksIndependently(t *testing.T) {
 				t.Fatalf("status: got %d, want 201", w.Code)
 			}
 			switch name {
-			case "logging":
+			case loggingMiddleware:
 				assertAccessLog(t, &logs, http.MethodPost, tripRoute, http.StatusCreated)
-			case "metrics":
+			case metricsMiddleware:
 				collected := collectMetrics(t, signals.reader)
 				assertRequestDuration(t, collected, http.MethodPost, tripRoute, http.StatusCreated)
 				assertActiveRequests(t, collected, http.MethodPost, tripRoute, 0)
-			case "tracing":
+			case tracingMiddleware:
 				assertHTTPSpan(t, signals.exporter, http.MethodPost, tripRoute, http.StatusCreated)
 			}
 		})

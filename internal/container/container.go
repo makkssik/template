@@ -19,8 +19,8 @@ import (
 	gethandler "github.com/makkssik/template/internal/http/trip/get"
 	"github.com/makkssik/template/internal/infra/postgres"
 	"github.com/makkssik/template/internal/infra/telemetry"
-	historypg "github.com/makkssik/template/internal/repository/history"
-	trippg "github.com/makkssik/template/internal/repository/trip"
+	"github.com/makkssik/template/internal/repository/history"
+	"github.com/makkssik/template/internal/repository/trip"
 	"github.com/makkssik/template/internal/usecase/checkup"
 	"github.com/makkssik/template/internal/usecase/trip/create"
 	"github.com/makkssik/template/internal/usecase/trip/finish"
@@ -76,8 +76,8 @@ func New(ctx context.Context, cfg config.Config) (app *Application, err error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	trips := trippg.NewPostgresqlRepository(pool, cfg.DatabaseQueryTimeout)
-	history := historypg.NewPostgresqlRepository(pool, cfg.DatabaseQueryTimeout)
+	trips := trip.NewPostgresqlRepository(pool, cfg.DatabaseQueryTimeout)
+	historyRepo := history.NewPostgresqlRepository(pool, cfg.DatabaseQueryTimeout)
 	tx := postgres.NewTxManager(pool, cfg.DatabaseQueryTimeout)
 
 	tripMeter := signals.Meter.Meter("trip-service/trips")
@@ -93,9 +93,9 @@ func New(ctx context.Context, cfg config.Config) (app *Application, err error) {
 		return nil, err
 	}
 
-	createTrip := create.New(trips, history, tx, events)
+	createTrip := create.New(trips, historyRepo, tx, events)
 	getTrip := get.New(trips)
-	finishTrip := finish.New(trips, history, tx, events)
+	finishTrip := finish.New(trips, historyRepo, tx, events)
 	checkupService := checkup.NewService(checkup.ServiceCfg{
 		Database:     pool,
 		QueryTimeout: cfg.DatabaseQueryTimeout,

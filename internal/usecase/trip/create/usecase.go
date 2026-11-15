@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Usecase) CreateTrip(ctx context.Context, opts Input) (*domaintrips.Trip, error) {
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	trip, err := domaintrips.New(uuid.New(), now, domaintrips.NewParams{
 		UserID:     opts.UserID,
 		DriverID:   opts.DriverID,

@@ -20,6 +20,7 @@ import (
 )
 
 func TestHandler(t *testing.T) {
+	const invalidRequestCode = "invalid_request"
 	body := `{"user_id":"5cb72c04-7650-45c9-a79b-bcdba0631e0c","driver_id":"8860b315-ec86-42eb-a17c-7c163d721ff5","start_point":{"latitude":59.9398,"longitude":30.3146},"end_point":{"latitude":59.929,"longitude":30.3626},"price":1450}`
 	for _, tc := range []struct {
 		name, body string
@@ -31,10 +32,10 @@ func TestHandler(t *testing.T) {
 		{"zero price", strings.Replace(body, `"price":1450`, `"price":0`, 1), nil, 201, ""},
 		{"busy", body, trip.ErrDriverBusy, 409, "driver_busy"},
 		{"failure", body, errors.New("secret SQL"), 500, "internal_error"},
-		{"invalid", `{}`, nil, 400, "invalid_request"},
-		{"unknown", strings.Replace(body, `"price":1450`, `"price":1450,"extra":1`, 1), nil, 400, "invalid_request"},
-		{"missing price", strings.Replace(body, `,"price":1450`, "", 1), nil, 400, "invalid_request"},
-		{"negative", strings.Replace(body, `"price":1450`, `"price":-1`, 1), nil, 400, "invalid_request"},
+		{"invalid", `{}`, nil, 400, invalidRequestCode},
+		{"unknown", strings.Replace(body, `"price":1450`, `"price":1450,"extra":1`, 1), nil, 400, invalidRequestCode},
+		{"missing price", strings.Replace(body, `,"price":1450`, "", 1), nil, 400, invalidRequestCode},
+		{"negative", strings.Replace(body, `"price":1450`, `"price":-1`, 1), nil, 400, invalidRequestCode},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)

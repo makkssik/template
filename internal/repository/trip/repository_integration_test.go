@@ -1,6 +1,6 @@
 //go:build integration
 
-package pg_test
+package trip_test
 
 import (
 	"context"
@@ -17,10 +17,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	trip "github.com/makkssik/template/internal/domain/trip"
+	domaintrip "github.com/makkssik/template/internal/domain/trip"
 	"github.com/makkssik/template/internal/infra/postgres"
-	historypg "github.com/makkssik/template/internal/repository/history"
-	trippg "github.com/makkssik/template/internal/repository/trip"
+	"github.com/makkssik/template/internal/repository/history"
+	"github.com/makkssik/template/internal/repository/trip"
+	"github.com/makkssik/template/internal/usecase/trip/create"
 	"github.com/makkssik/template/internal/usecase/trip/finish"
 )
 
@@ -81,15 +82,50 @@ func database(t *testing.T, tracer pgx.QueryTracer) *pgxpool.Pool {
 	return pool
 }
 
-func newTrip() trip.Trip {
+func newTrip() domaintrip.Trip {
 	now := time.Now().UTC()
-	return trip.Trip{TripID: uuid.New(), UserID: uuid.New(), DriverID: uuid.New(), Status: trip.StatusActive, StartedAt: now, CreatedAt: now, UpdatedAt: now}
+	return domaintrip.Trip{TripID: uuid.New(), UserID: uuid.New(), DriverID: uuid.New(), Status: domaintrip.StatusActive, StartedAt: now, CreatedAt: now, UpdatedAt: now}
+}
+
+type creationRecorder struct{ tripID uuid.UUID }
+
+func (r *creationRecorder) Created(_ context.Context, id uuid.UUID) { r.tripID = id }
+
+func TestCreateTimestampsRoundTrip(t *testing.T) {
+	pool := database(t, nil)
+	repo := trip.NewPostgresqlRepository(pool, 5*time.Second)
+	historyRepo := history.NewPostgresqlRepository(pool, 5*time.Second)
+	tx := postgres.NewTxManager(pool, 5*time.Second)
+	observer := &creationRecorder{}
+	created, err := create.New(repo, historyRepo, tx, observer).CreateTrip(t.Context(), create.Input{
+		UserID: uuid.New(), DriverID: uuid.New(), Price: 1450,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetched, err := repo.GetTripByID(t.Context(), created.TripID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *created != *fetched {
+		t.Fatalf("create and get results differ after database round trip: created=%+v fetched=%+v", created, fetched)
+	}
+	if fetched.StartedAt.Location() != time.UTC || fetched.FinishedAt != nil || observer.tripID != created.TripID {
+		t.Fatalf("unexpected creation result: trip=%+v event=%v", fetched, observer.tripID)
+	}
+	var changedAt time.Time
+	if err := pool.QueryRow(t.Context(), "SELECT changed_at FROM trip_status_history WHERE trip_id=$1 AND to_status='active'", created.TripID).Scan(&changedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !changedAt.Equal(created.StartedAt) {
+		t.Fatalf("history time %v differs from creation response %v", changedAt, created.StartedAt)
+	}
 }
 
 func TestAtomicityAndNestedTransaction(t *testing.T) {
 	pool := database(t, nil)
-	repo := trippg.NewPostgresqlRepository(pool, 5*time.Second)
-	history := historypg.NewPostgresqlRepository(pool, 5*time.Second)
+	repo := trip.NewPostgresqlRepository(pool, 5*time.Second)
+	historyRepo := history.NewPostgresqlRepository(pool, 5*time.Second)
 	tx := postgres.NewTxManager(pool, 5*time.Second)
 	ctx := context.Background()
 	for _, panics := range []bool{false, true} {
@@ -112,14 +148,14 @@ func TestAtomicityAndNestedTransaction(t *testing.T) {
 					if panics {
 						panic("rollback")
 					}
-					return history.RegisterStatusChange(ctx, trip.StatusChange{TripID: value.TripID, ToStatus: trip.Status("invalid"), ChangedAt: time.Now()})
+					return historyRepo.RegisterStatusChange(ctx, domaintrip.StatusChange{TripID: value.TripID, ToStatus: domaintrip.Status("invalid"), ChangedAt: time.Now()})
 				})
 			})
 			if err == nil {
 				t.Error("expected failure")
 			}
 		}()
-		if _, err := repo.GetTripByID(ctx, value.TripID); !errors.Is(err, trip.ErrTripNotFound) {
+		if _, err := repo.GetTripByID(ctx, value.TripID); !errors.Is(err, domaintrip.ErrTripNotFound) {
 			t.Fatalf("trip survived rollback: %v", err)
 		}
 	}
@@ -129,7 +165,7 @@ func TestAtomicityAndNestedTransaction(t *testing.T) {
 			return err
 		}
 		return tx.Do(ctx, func(ctx context.Context) error {
-			return history.RegisterStatusChange(ctx, trip.StatusChange{TripID: value.TripID, ToStatus: trip.StatusActive, ChangedAt: value.StartedAt})
+			return historyRepo.RegisterStatusChange(ctx, domaintrip.StatusChange{TripID: value.TripID, ToStatus: domaintrip.StatusActive, ChangedAt: value.StartedAt})
 		})
 	}); err != nil {
 		t.Fatal(err)
@@ -142,8 +178,8 @@ func TestAtomicityAndNestedTransaction(t *testing.T) {
 
 func TestConcurrentCreateAndFinish(t *testing.T) {
 	pool := database(t, nil)
-	repo := trippg.NewPostgresqlRepository(pool, 5*time.Second)
-	history := historypg.NewPostgresqlRepository(pool, 5*time.Second)
+	repo := trip.NewPostgresqlRepository(pool, 5*time.Second)
+	historyRepo := history.NewPostgresqlRepository(pool, 5*time.Second)
 	tx := postgres.NewTxManager(pool, 5*time.Second)
 	driver := uuid.New()
 	var success, conflict atomic.Int32
@@ -165,7 +201,7 @@ func TestConcurrentCreateAndFinish(t *testing.T) {
 			if err := repo.CreateTrip(ctx, value); err != nil {
 				return err
 			}
-			return history.RegisterStatusChange(ctx, trip.StatusChange{TripID: value.TripID, ToStatus: trip.StatusActive, ChangedAt: value.StartedAt})
+			return historyRepo.RegisterStatusChange(ctx, domaintrip.StatusChange{TripID: value.TripID, ToStatus: domaintrip.StatusActive, ChangedAt: value.StartedAt})
 		})
 		switch {
 		case err == nil:
@@ -173,7 +209,7 @@ func TestConcurrentCreateAndFinish(t *testing.T) {
 			mu.Lock()
 			winner = value.TripID
 			mu.Unlock()
-		case errors.Is(err, trip.ErrDriverBusy):
+		case errors.Is(err, domaintrip.ErrDriverBusy):
 			conflict.Add(1)
 		default:
 			t.Errorf("create: %v", err)
@@ -189,7 +225,7 @@ func TestConcurrentCreateAndFinish(t *testing.T) {
 	conflict.Store(0)
 	var winnerFinishedAt time.Time
 	observer := &completionCounter{}
-	finishTrip := finish.New(repo, history, tx, observer)
+	finishTrip := finish.New(repo, historyRepo, tx, observer)
 	parallel(func() {
 		value, err := finishTrip.FinishTrip(t.Context(), winner)
 		switch {
@@ -198,7 +234,7 @@ func TestConcurrentCreateAndFinish(t *testing.T) {
 			mu.Lock()
 			winnerFinishedAt = *value.FinishedAt
 			mu.Unlock()
-		case errors.Is(err, trip.ErrTripCompleted):
+		case errors.Is(err, domaintrip.ErrTripCompleted):
 			conflict.Add(1)
 		default:
 			t.Errorf("finish: %v", err)
@@ -214,7 +250,7 @@ func TestConcurrentCreateAndFinish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if completed.Status != trip.StatusCompleted || completed.FinishedAt == nil || winnerFinishedAt.IsZero() || !completed.FinishedAt.Equal(winnerFinishedAt) {
+	if completed.Status != domaintrip.StatusCompleted || completed.FinishedAt == nil || winnerFinishedAt.IsZero() || !completed.FinishedAt.Equal(winnerFinishedAt) {
 		t.Fatalf("finish result changed after concurrent calls: got %+v, winner finished at %v", completed, winnerFinishedAt)
 	}
 	if count, err := repo.CountActive(t.Context()); err != nil || count != 0 {
@@ -276,8 +312,8 @@ func (r *completionCounter) Completed(context.Context, uuid.UUID) { r.count.Add(
 func TestFinishLocksAndSavesTrip(t *testing.T) {
 	queries := &queryRecorder{}
 	pool := database(t, queries)
-	repo := trippg.NewPostgresqlRepository(pool, 5*time.Second)
-	history := historypg.NewPostgresqlRepository(pool, 5*time.Second)
+	repo := trip.NewPostgresqlRepository(pool, 5*time.Second)
+	historyRepo := history.NewPostgresqlRepository(pool, 5*time.Second)
 	tx := postgres.NewTxManager(pool, 5*time.Second)
 	ctx := t.Context()
 	value := newTrip()
@@ -287,11 +323,11 @@ func TestFinishLocksAndSavesTrip(t *testing.T) {
 	if err := repo.CreateTrip(ctx, value); err != nil {
 		t.Fatal(err)
 	}
-	if err := history.RegisterStatusChange(ctx, trip.StatusChange{TripID: value.TripID, ToStatus: trip.StatusActive, ChangedAt: value.StartedAt}); err != nil {
+	if err := historyRepo.RegisterStatusChange(ctx, domaintrip.StatusChange{TripID: value.TripID, ToStatus: domaintrip.StatusActive, ChangedAt: value.StartedAt}); err != nil {
 		t.Fatal(err)
 	}
 	observer := &completionRecorder{}
-	usecase := finish.New(repo, history, tx, observer)
+	usecase := finish.New(repo, historyRepo, tx, observer)
 	queries.reset()
 	completed, err := usecase.FinishTrip(ctx, value.TripID)
 	if err != nil {
@@ -301,7 +337,7 @@ func TestFinishLocksAndSavesTrip(t *testing.T) {
 	if len(statements) != 3 || !strings.HasPrefix(statements[0], "SELECT ") || !strings.HasSuffix(statements[0], " FOR UPDATE") || !strings.HasPrefix(statements[1], "UPDATE TRIPS ") || !strings.HasPrefix(statements[2], "INSERT INTO TRIP_STATUS_HISTORY ") {
 		t.Fatalf("finish must lock the trip, save its state and append history: %v", statements)
 	}
-	if completed.TripID != value.TripID || completed.Status != trip.StatusCompleted || completed.FinishedAt == nil || observer.tripID != value.TripID {
+	if completed.TripID != value.TripID || completed.Status != domaintrip.StatusCompleted || completed.FinishedAt == nil || observer.tripID != value.TripID {
 		t.Fatalf("wrong completion: trip=%+v event=%v", completed, observer.tripID)
 	}
 	persisted, err := repo.GetTripByID(ctx, value.TripID)
@@ -319,15 +355,15 @@ func TestFinishLocksAndSavesTrip(t *testing.T) {
 
 func TestFinishRollbackAndConflicts(t *testing.T) {
 	pool := database(t, nil)
-	repo := trippg.NewPostgresqlRepository(pool, 5*time.Second)
-	history := historypg.NewPostgresqlRepository(pool, 5*time.Second)
+	repo := trip.NewPostgresqlRepository(pool, 5*time.Second)
+	historyRepo := history.NewPostgresqlRepository(pool, 5*time.Second)
 	tx := postgres.NewTxManager(pool, 5*time.Second)
 	ctx := t.Context()
 	value := newTrip()
 	if err := repo.CreateTrip(ctx, value); err != nil {
 		t.Fatal(err)
 	}
-	if err := history.RegisterStatusChange(ctx, trip.StatusChange{TripID: value.TripID, ToStatus: trip.StatusActive, ChangedAt: value.StartedAt}); err != nil {
+	if err := historyRepo.RegisterStatusChange(ctx, domaintrip.StatusChange{TripID: value.TripID, ToStatus: domaintrip.StatusActive, ChangedAt: value.StartedAt}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := repo.GetTripByID(ctx, value.TripID)
@@ -339,7 +375,7 @@ func TestFinishRollbackAndConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	observer := &completionRecorder{}
-	usecase := finish.New(repo, history, tx, observer)
+	usecase := finish.New(repo, historyRepo, tx, observer)
 	if got, err := usecase.FinishTrip(ctx, value.TripID); err == nil || got != nil {
 		t.Fatalf("history failure must fail completion: trip=%+v err=%v", got, err)
 	}
@@ -347,7 +383,7 @@ func TestFinishRollbackAndConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Status != trip.StatusActive || after.FinishedAt != nil || !after.UpdatedAt.Equal(before.UpdatedAt) || observer.tripID != uuid.Nil {
+	if after.Status != domaintrip.StatusActive || after.FinishedAt != nil || !after.UpdatedAt.Equal(before.UpdatedAt) || observer.tripID != uuid.Nil {
 		t.Fatalf("completion survived rollback: trip=%+v event=%v", after, observer.tripID)
 	}
 	var count int
@@ -364,7 +400,7 @@ func TestFinishRollbackAndConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := usecase.FinishTrip(ctx, value.TripID); !errors.Is(err, trip.ErrTripCompleted) || got != nil {
+	if got, err := usecase.FinishTrip(ctx, value.TripID); !errors.Is(err, domaintrip.ErrTripCompleted) || got != nil {
 		t.Fatalf("repeated completion: trip=%+v err=%v", got, err)
 	}
 	after, err = repo.GetTripByID(ctx, value.TripID)
@@ -374,7 +410,7 @@ func TestFinishRollbackAndConflicts(t *testing.T) {
 	if after.FinishedAt == nil || !after.FinishedAt.Equal(*completed.FinishedAt) {
 		t.Fatalf("repeated completion changed finish time: before=%+v after=%+v", completed, after)
 	}
-	if got, err := usecase.FinishTrip(ctx, uuid.New()); !errors.Is(err, trip.ErrTripNotFound) || got != nil {
+	if got, err := usecase.FinishTrip(ctx, uuid.New()); !errors.Is(err, domaintrip.ErrTripNotFound) || got != nil {
 		t.Fatalf("missing trip completion: trip=%+v err=%v", got, err)
 	}
 }
