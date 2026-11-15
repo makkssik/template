@@ -1,9 +1,22 @@
 # Локальные файлы окружения: создаются tripgoctl, у каждого свои
-.env
-.tripgo/
+/.env
+/.env.*
+!/.env.example
+/.tripgo/
+
+# Локальные настройки IDE
+/.idea/
+/.vscode/
 
 # Сборка
-bin/
+/bin/
+/trip-service
+*.test
+
+# Отчёты тестов
+/coverage/
+/coverage.out
+/coverage.html
 
 .DS_Store
 

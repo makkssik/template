@@ -12,6 +12,11 @@ import (
 )
 
 type Config struct {
+	OTELServiceName string `env:"OTEL_SERVICE_NAME" env-required:"true" validate:"required"`
+	OTELEndpoint    string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" env-required:"true" validate:"required"`
+	OTELProtocol    string `env:"OTEL_EXPORTER_OTLP_PROTOCOL" env-required:"true" validate:"oneof=grpc http/protobuf"`
+	OTELSampler     string `env:"OTEL_TRACES_SAMPLER" env-required:"true" validate:"oneof=always_on always_off traceidratio parentbased_always_on parentbased_always_off parentbased_traceidratio"`
+
 	HTTPAddr                string        `env:"HTTP_ADDR" env-required:"true" validate:"required"`
 	HTTPReadTimeout         time.Duration `env:"HTTP_READ_TIMEOUT" env-required:"true" validate:"gt=0"`
 	HTTPReadHeaderTimeout   time.Duration `env:"HTTP_READ_HEADER_TIMEOUT" env-required:"true" validate:"gt=0"`
