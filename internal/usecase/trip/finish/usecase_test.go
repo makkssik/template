@@ -14,32 +14,34 @@ import (
 )
 
 func TestOperation(t *testing.T) {
-	const (
-		saveStage        = "save"
-		successStage     = "success"
-		transactionStage = "transaction"
-		missingStage     = "missing"
-		completedStage   = "completed"
-	)
-	for _, stage := range []string{successStage, "load", saveStage, "history", transactionStage, "commit", completedStage, missingStage} {
-		t.Run(stage, func(t *testing.T) {
+	failure := errors.New("dependency failed")
+	tests := []struct {
+		name       string
+		completed  bool
+		beginErr   error
+		loadErr    error
+		saveErr    error
+		historyErr error
+		commitErr  error
+		wantErr    error
+	}{
+		{name: "trip finished"},
+		{name: "load fails", loadErr: failure, wantErr: failure},
+		{name: "save fails", saveErr: failure, wantErr: failure},
+		{name: "history fails", historyErr: failure, wantErr: failure},
+		{name: "begin fails", beginErr: failure, wantErr: failure},
+		{name: "commit fails", commitErr: failure, wantErr: failure},
+		{name: "trip already completed", completed: true, wantErr: trip.ErrTripCompleted},
+		{name: "trip not found", loadErr: trip.ErrTripNotFound, wantErr: trip.ErrTripNotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			repo := NewMocktripRepository(ctrl)
 			history := NewMockhistoryRepository(ctrl)
 			tx := NewMocktxManager(ctrl)
 			observer := NewMockevents(ctrl)
 			id := uuid.New()
-			failure := errors.New("dependency failed")
-			var wantErr error
-			switch stage {
-			case completedStage:
-				wantErr = trip.ErrTripCompleted
-			case missingStage:
-				wantErr = trip.ErrTripNotFound
-			case successStage:
-			default:
-				wantErr = failure
-			}
 			loaded := trip.Trip{
 				TripID: id, UserID: uuid.New(), DriverID: uuid.New(),
 				Price: 1450, Status: trip.StatusActive,
@@ -47,7 +49,7 @@ func TestOperation(t *testing.T) {
 				EndPoint:   trip.Coordinates{Latitude: 60, Longitude: 31},
 				StartedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			}
-			if stage == completedStage {
+			if tc.completed {
 				at := loaded.StartedAt.Add(time.Hour)
 				loaded.Status, loaded.FinishedAt, loaded.UpdatedAt = trip.StatusCompleted, &at, at
 			}
@@ -57,48 +59,40 @@ func TestOperation(t *testing.T) {
 			type transactionKey struct{}
 			txCtx := context.WithValue(t.Context(), transactionKey{}, true)
 			tx.EXPECT().Do(t.Context(), gomock.Any()).DoAndReturn(func(_ context.Context, fn func(context.Context) error) error {
-				if stage == transactionStage {
-					return failure
+				if tc.beginErr != nil {
+					return tc.beginErr
 				}
 				if err := fn(txCtx); err != nil {
 					return err
 				}
-				if stage == "commit" {
-					return failure
+				if tc.commitErr != nil {
+					return tc.commitErr
 				}
 				committed = true
 				return nil
 			})
-			if stage != transactionStage {
-				var loadErr error
-				if stage == "load" || stage == missingStage {
-					loadErr = wantErr
-				}
-				load := repo.EXPECT().GetTripForUpdate(txCtx, id).Return(&loaded, loadErr)
-				if loadErr == nil && stage != completedStage {
+			if tc.beginErr == nil {
+				load := repo.EXPECT().GetTripForUpdate(txCtx, id).Return(&loaded, tc.loadErr)
+				if tc.loadErr == nil && !tc.completed {
 					save := repo.EXPECT().SaveTrip(txCtx, gomock.Any()).After(load).DoAndReturn(func(_ context.Context, value trip.Trip) (*trip.Trip, error) {
 						assertFinishedTrip(t, before, value)
-						if stage == saveStage {
-							return nil, failure
+						if tc.saveErr != nil {
+							return nil, tc.saveErr
 						}
-						// Model database timestamp precision and ensure the persisted value is returned.
 						at := value.FinishedAt.Truncate(time.Microsecond)
 						saved = value
 						saved.FinishedAt, saved.UpdatedAt = &at, at
 						return &saved, nil
 					})
-					if stage != saveStage {
+					if tc.saveErr == nil {
 						history.EXPECT().RegisterStatusChange(txCtx, gomock.Any()).After(save).DoAndReturn(func(_ context.Context, change trip.StatusChange) error {
 							assertHistory(t, change, before, saved)
-							if stage == "history" {
-								return failure
-							}
-							return nil
+							return tc.historyErr
 						})
 					}
 				}
 			}
-			if stage == successStage {
+			if tc.wantErr == nil {
 				observer.EXPECT().Completed(t.Context(), id).Do(func(context.Context, uuid.UUID) {
 					if !committed {
 						t.Fatal("completion event emitted before commit")
@@ -106,16 +100,16 @@ func TestOperation(t *testing.T) {
 				})
 			}
 			got, err := finish.New(repo, history, tx, observer).FinishTrip(t.Context(), id)
-			if !errors.Is(err, wantErr) {
-				t.Fatalf("got %v, want %v", err, wantErr)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("got %v, want %v", err, tc.wantErr)
 			}
-			if wantErr == nil && (got == nil || *got != saved) {
+			if tc.wantErr == nil && (got == nil || *got != saved) {
 				t.Fatalf("wrong result: got %+v, want %+v", got, saved)
 			}
-			if wantErr != nil && got != nil {
+			if tc.wantErr != nil && got != nil {
 				t.Fatal("result returned after failure")
 			}
-			if stage == completedStage && loaded != before {
+			if tc.completed && loaded != before {
 				t.Fatal("repeated finish modified the completed trip")
 			}
 		})

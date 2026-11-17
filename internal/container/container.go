@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/makkssik/template/internal/config"
+	"github.com/makkssik/template/internal/gateway/push"
 	transport "github.com/makkssik/template/internal/http"
 	healthhandler "github.com/makkssik/template/internal/http/health"
 	"github.com/makkssik/template/internal/http/middleware"
@@ -25,9 +26,12 @@ import (
 	"github.com/makkssik/template/internal/usecase/trip/create"
 	"github.com/makkssik/template/internal/usecase/trip/finish"
 	"github.com/makkssik/template/internal/usecase/trip/get"
+	"github.com/makkssik/template/internal/worker/positions"
 )
 
 type Application struct {
+	Positions *positions.Worker
+	Push      *push.Gateway
 	Telemetry *telemetry.Telemetry
 	Logger    *slog.Logger
 	Pool      *pgxpool.Pool
@@ -106,8 +110,22 @@ func New(ctx context.Context, cfg config.Config) (app *Application, err error) {
 	finishHandler := finishhandler.New(finishTrip, logger)
 	healthHandler := healthhandler.New(logger)
 	readyHandler := readyhandler.New(checkupService, logger)
-	implementation := transport.New(createHandler, getHandler, finishHandler, healthHandler, readyHandler)
+	positionComponents, err := buildPositions(cfg, pool, signals, logger)
+	if err != nil {
+		return nil, err
+	}
+	implementation := transport.New(transport.ImplementationCfg{
+		CreateHandler:  createHandler,
+		GetHandler:     getHandler,
+		FinishHandler:  finishHandler,
+		HealthHandler:  healthHandler,
+		ReadyHandler:   readyHandler,
+		PositionCreate: positionComponents.create,
+		PositionList:   positionComponents.list,
+	})
 	return &Application{
+		Positions: positionComponents.worker,
+		Push:      positionComponents.push,
 		Pool:      pool,
 		Server:    transport.NewServer(cfg, implementation, logger, signals.Tracer, metrics),
 		Telemetry: signals,

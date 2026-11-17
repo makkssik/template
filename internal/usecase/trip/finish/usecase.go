@@ -51,5 +51,10 @@ type Usecase struct {
 }
 
 func New(repo tripRepository, history historyRepository, tx txManager, observer events) *Usecase {
-	return &Usecase{tripsRepository: repo, statusHistoryRepository: history, txManager: tx, events: observer}
+	return &Usecase{
+		tripsRepository:         repo,
+		statusHistoryRepository: history,
+		txManager:               tx,
+		events:                  observer,
+	}
 }

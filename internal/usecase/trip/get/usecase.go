@@ -17,6 +17,10 @@ func (s *Usecase) GetTrip(ctx context.Context, tripID uuid.UUID) (*domaintrips.T
 	return trip, nil
 }
 
-type Usecase struct{ tripsRepository tripRepository }
+type Usecase struct {
+	tripsRepository tripRepository
+}
 
-func New(repo tripRepository) *Usecase { return &Usecase{tripsRepository: repo} }
+func New(repo tripRepository) *Usecase {
+	return &Usecase{tripsRepository: repo}
+}

@@ -18,26 +18,111 @@ func TestDatabaseQueryAttributes(t *testing.T) {
 		insertOperation = "INSERT"
 		collection      = "bookings"
 	)
-	for _, tc := range []struct {
-		name, sql, operation, collection string
+	tests := []struct {
+		name       string
+		sql        string
+		operation  string
+		collection string
 	}{
-		{"current table", "SELECT id FROM trips WHERE id=$1", selectOperation, "trips"},
-		{"new table", "SELECT trips FROM bookings WHERE id=$1", selectOperation, collection},
-		{"mixed case and whitespace", "select id\nFrOm\tBookings b WHERE b.id=$1", selectOperation, collection},
-		{"insert", "INSERT INTO bookings (id) VALUES ($1)", insertOperation, collection},
-		{"insert without space", "INSERT INTO bookings(id) VALUES ($1)", insertOperation, collection},
-		{"update", "UPDATE bookings SET status=$1 WHERE id=$2", "UPDATE", collection},
-		{"delete", "DELETE FROM bookings WHERE id=$1", "DELETE", collection},
-		{"locking select", "SELECT id FROM bookings WHERE id=$1 FOR UPDATE", selectOperation, collection},
-		{"upsert", "INSERT INTO bookings (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET id=$1", insertOperation, collection},
-		{"qualified table", "SELECT id FROM public.bookings;", selectOperation, "public.bookings"},
-		{"no table", "SELECT 1", selectOperation, ""},
-		{"missing table name", "SELECT id FROM", selectOperation, ""},
-		{"begin", "BEGIN ISOLATION LEVEL READ COMMITTED", "BEGIN", ""},
-		{"commit", "COMMIT", "COMMIT", ""},
-		{"rollback", "ROLLBACK", "ROLLBACK", ""},
-		{"empty", "", "", ""},
-	} {
+		{
+			name:       "current table",
+			sql:        "SELECT id FROM trips WHERE id=$1",
+			operation:  selectOperation,
+			collection: "trips",
+		},
+		{
+			name:       "new table",
+			sql:        "SELECT trips FROM bookings WHERE id=$1",
+			operation:  selectOperation,
+			collection: collection,
+		},
+		{
+			name:       "mixed case and whitespace",
+			sql:        "select id\nFrOm\tBookings b WHERE b.id=$1",
+			operation:  selectOperation,
+			collection: collection,
+		},
+		{
+			name:       "insert",
+			sql:        "INSERT INTO bookings (id) VALUES ($1)",
+			operation:  insertOperation,
+			collection: collection,
+		},
+		{
+			name:       "insert without space",
+			sql:        "INSERT INTO bookings(id) VALUES ($1)",
+			operation:  insertOperation,
+			collection: collection,
+		},
+		{
+			name:       "update",
+			sql:        "UPDATE bookings SET status=$1 WHERE id=$2",
+			operation:  "UPDATE",
+			collection: collection,
+		},
+		{
+			name:       "delete",
+			sql:        "DELETE FROM bookings WHERE id=$1",
+			operation:  "DELETE",
+			collection: collection,
+		},
+		{
+			name:       "locking select",
+			sql:        "SELECT id FROM bookings WHERE id=$1 FOR UPDATE",
+			operation:  selectOperation,
+			collection: collection,
+		},
+		{
+			name:       "upsert",
+			sql:        "INSERT INTO bookings (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET id=$1",
+			operation:  insertOperation,
+			collection: collection,
+		},
+		{
+			name:       "qualified table",
+			sql:        "SELECT id FROM public.bookings;",
+			operation:  selectOperation,
+			collection: "public.bookings",
+		},
+		{
+			name:       "no table",
+			sql:        "SELECT 1",
+			operation:  selectOperation,
+			collection: "",
+		},
+		{
+			name:       "missing table name",
+			sql:        "SELECT id FROM",
+			operation:  selectOperation,
+			collection: "",
+		},
+		{
+			name:       "begin",
+			sql:        "BEGIN ISOLATION LEVEL READ COMMITTED",
+			operation:  "BEGIN",
+			collection: "",
+		},
+		{
+			name:       "commit",
+			sql:        "COMMIT",
+			operation:  "COMMIT",
+			collection: "",
+		},
+		{
+			name:       "rollback",
+			sql:        "ROLLBACK",
+			operation:  "ROLLBACK",
+			collection: "",
+		},
+		{
+			name:       "empty",
+			sql:        "",
+			operation:  "",
+			collection: "",
+		},
+	}
+
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := tracetest.NewSpanRecorder()
 			tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))

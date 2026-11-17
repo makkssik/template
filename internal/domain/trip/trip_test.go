@@ -31,20 +31,63 @@ func TestFinish(t *testing.T) {
 func TestNew(t *testing.T) {
 	id := uuid.New()
 	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for _, tc := range []struct {
+	tests := []struct {
 		name   string
 		change func(*trip.NewParams)
 		field  string
 	}{
-		{"valid", func(*trip.NewParams) {}, ""},
-		{"zero price", func(v *trip.NewParams) { v.Price = 0 }, ""},
-		{"user", func(v *trip.NewParams) { v.UserID = uuid.Nil }, "user_id"},
-		{"driver", func(v *trip.NewParams) { v.DriverID = uuid.Nil }, "driver_id"},
-		{"price", func(v *trip.NewParams) { v.Price = -1 }, "price"},
-		{"latitude", func(v *trip.NewParams) { v.StartPoint.Latitude = 91 }, "start_point.latitude"},
-		{"longitude", func(v *trip.NewParams) { v.EndPoint.Longitude = -181 }, "end_point.longitude"},
-		{"nan", func(v *trip.NewParams) { v.EndPoint.Latitude = math.NaN() }, "end_point.latitude"},
-	} {
+		{name: "valid"},
+		{
+			name: "zero price",
+			change: func(v *trip.NewParams) {
+				v.Price = 0
+			},
+		},
+		{
+			name: "user",
+			change: func(v *trip.NewParams) {
+				v.UserID = uuid.Nil
+			},
+			field: "user_id",
+		},
+		{
+			name: "driver",
+			change: func(v *trip.NewParams) {
+				v.DriverID = uuid.Nil
+			},
+			field: "driver_id",
+		},
+		{
+			name: "price",
+			change: func(v *trip.NewParams) {
+				v.Price = -1
+			},
+			field: "price",
+		},
+		{
+			name: "latitude",
+			change: func(v *trip.NewParams) {
+				v.StartPoint.Latitude = 91
+			},
+			field: "start_point.latitude",
+		},
+		{
+			name: "longitude",
+			change: func(v *trip.NewParams) {
+				v.EndPoint.Longitude = -181
+			},
+			field: "end_point.longitude",
+		},
+		{
+			name: "nan",
+			change: func(v *trip.NewParams) {
+				v.EndPoint.Latitude = math.NaN()
+			},
+			field: "end_point.latitude",
+		},
+	}
+
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			params := trip.NewParams{
 				UserID:     uuid.New(),
@@ -53,7 +96,9 @@ func TestNew(t *testing.T) {
 				EndPoint:   trip.Coordinates{Latitude: 60, Longitude: 30.4},
 				Price:      1450,
 			}
-			tc.change(&params)
+			if tc.change != nil {
+				tc.change(&params)
+			}
 			got, err := trip.New(id, at, params)
 			if tc.field == "" {
 				if err != nil {

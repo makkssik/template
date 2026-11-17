@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -12,23 +13,51 @@ import (
 )
 
 func TestProblem(t *testing.T) {
-	for _, tc := range []struct {
-		err    error
-		status int
-		code   string
+	tests := []struct {
+		err        error
+		wantStatus int
+		wantCode   string
 	}{
-		{trip.ErrDriverBusy, 409, "driver_busy"}, {trip.ErrTripCompleted, 409, "trip_completed"}, {trip.ErrTripNotFound, 404, "trip_not_found"}, {&trip.ValidationError{Field: "price", Detail: "negative"}, 400, "invalid_request"}, {errors.New("secret SQL password"), 500, "internal_error"},
-	} {
-		status, body := domainerror.Problem(fmt.Errorf("wrapped: %w", tc.err))
-		if status != tc.status || body.Code != tc.code || int(body.Status) != status {
-			t.Fatalf("wrong problem: %+v", body)
-		}
-		data, err := json.Marshal(body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(data), "secret") {
-			t.Fatal("internal details leaked")
-		}
+		{
+			err:        trip.ErrDriverBusy,
+			wantStatus: http.StatusConflict,
+			wantCode:   "driver_busy",
+		},
+		{
+			err:        trip.ErrTripCompleted,
+			wantStatus: http.StatusConflict,
+			wantCode:   "trip_completed",
+		},
+		{
+			err:        trip.ErrTripNotFound,
+			wantStatus: http.StatusNotFound,
+			wantCode:   "trip_not_found",
+		},
+		{
+			err:        &trip.ValidationError{Field: "price", Detail: "negative"},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "invalid_request",
+		},
+		{
+			err:        errors.New("secret SQL password"),
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "internal_error",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.wantCode, func(t *testing.T) {
+			status, body := domainerror.Problem(fmt.Errorf("wrapped: %w", tc.err))
+			if status != tc.wantStatus || body.Code != tc.wantCode || int(body.Status) != status {
+				t.Fatalf("wrong problem: %+v", body)
+			}
+			data, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), "secret") {
+				t.Fatal("internal details leaked")
+			}
+		})
 	}
 }

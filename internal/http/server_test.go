@@ -3,6 +3,7 @@ package http_test
 import (
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -20,15 +21,24 @@ func TestMalformedTripID(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := transport.NewServer(config.Config{}, &transport.Implementation{}, slog.New(slog.NewTextHandler(io.Discard, nil)), tracenoop.NewTracerProvider(), metrics)
-	for _, path := range []string{"/api/v1/trips/not-a-uuid", "/api/v1/trips/not-a-uuid/finish"} {
-		method := "GET"
-		if path[len(path)-6:] == "finish" {
-			method = "POST"
-		}
-		w := httptest.NewRecorder()
-		server.Handler.ServeHTTP(w, httptest.NewRequest(method, path, nil))
-		if w.Code != 400 {
-			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
-		}
+	const invalidTripPath = "/api/v1/trips/not-a-uuid"
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "get trip", method: http.MethodGet, path: invalidTripPath},
+		{name: "finish trip", method: http.MethodPost, path: invalidTripPath + "/finish"},
+		{name: "list positions", method: http.MethodGet, path: invalidTripPath + "/positions"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			server.Handler.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("%s: %d %s", tc.path, w.Code, w.Body)
+			}
+		})
 	}
 }

@@ -38,10 +38,11 @@ func NewServer(cfg config.Config, implementation *Implementation, logger *slog.L
 		return "unmatched"
 	}
 	handler := api.HandlerWithOptions(implementation, api.ChiServerOptions{
-		BaseRouter:       router,
-		ErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) { writeRequestError(logger, w, r, err) },
+		BaseRouter: router,
+		ErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+			writeRequestError(logger, w, r, err)
+		},
 	})
-	// Wrappers are applied inside out: Recover → Tracing → Logging → Metrics → router.
 	handler = middleware.Metrics(handler, metrics, route)
 	handler = middleware.Logging(handler, logger, route)
 	handler = middleware.Tracing(handler, tp, route)

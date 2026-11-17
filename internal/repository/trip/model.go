@@ -20,10 +20,11 @@ type Trip struct {
 	Price          int64   `db:"price"`
 	Status         string  `db:"status"`
 
-	StartedAt  time.Time  `db:"started_at"`
-	FinishedAt *time.Time `db:"finished_at"`
-	CreatedAt  time.Time  `db:"created_at"`
-	UpdatedAt  time.Time  `db:"updated_at"`
+	StartedAt      time.Time  `db:"started_at"`
+	FinishedAt     *time.Time `db:"finished_at"`
+	LastPositionAt *time.Time `db:"last_position_at"`
+	CreatedAt      time.Time  `db:"created_at"`
+	UpdatedAt      time.Time  `db:"updated_at"`
 }
 
 func dbToDomain(m Trip) trips.Trip {
@@ -31,6 +32,11 @@ func dbToDomain(m Trip) trips.Trip {
 	if m.FinishedAt != nil {
 		at := m.FinishedAt.UTC()
 		finishedAt = &at
+	}
+	var lastPositionAt *time.Time
+	if m.LastPositionAt != nil {
+		at := m.LastPositionAt.UTC()
+		lastPositionAt = &at
 	}
 	return trips.Trip{
 		TripID:   m.TripID,
@@ -44,11 +50,12 @@ func dbToDomain(m Trip) trips.Trip {
 			Latitude:  m.EndLatitude,
 			Longitude: m.EndLongitude,
 		},
-		Price:      m.Price,
-		Status:     trips.Status(m.Status),
-		StartedAt:  m.StartedAt.UTC(),
-		FinishedAt: finishedAt,
-		CreatedAt:  m.CreatedAt.UTC(),
-		UpdatedAt:  m.UpdatedAt.UTC(),
+		Price:          m.Price,
+		Status:         trips.Status(m.Status),
+		StartedAt:      m.StartedAt.UTC(),
+		FinishedAt:     finishedAt,
+		LastPositionAt: lastPositionAt,
+		CreatedAt:      m.CreatedAt.UTC(),
+		UpdatedAt:      m.UpdatedAt.UTC(),
 	}
 }

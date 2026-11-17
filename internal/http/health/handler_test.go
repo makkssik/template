@@ -22,7 +22,9 @@ func TestHealthWithoutDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	implementation := transport.New(nil, nil, nil, health.New(logger), nil)
+	implementation := transport.New(transport.ImplementationCfg{
+		HealthHandler: health.New(logger),
+	})
 	server := transport.NewServer(config.Config{}, implementation, logger, tracenoop.NewTracerProvider(), metrics)
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))

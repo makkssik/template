@@ -16,4 +16,6 @@ type ValidationError struct {
 	Detail string
 }
 
-func (e *ValidationError) Error() string { return fmt.Sprintf("%s: %s", e.Field, e.Detail) }
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Field, e.Detail)
+}

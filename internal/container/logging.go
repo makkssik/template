@@ -8,7 +8,6 @@ import (
 	"github.com/makkssik/template/internal/infra/telemetry"
 )
 
-// LogError reports a fatal error even when configuration loading or container construction failed.
 func LogError(ctx context.Context, err error) {
 	service := os.Getenv("OTEL_SERVICE_NAME")
 	if service == "" {

@@ -35,6 +35,7 @@ func run(parent context.Context) error {
 		return fmt.Errorf("build application: %w", err)
 	}
 	pool, server := application.Pool, application.Server
+	application.Positions.Start(context.WithoutCancel(parent))
 	serverErrors := make(chan error, 1)
 
 	go func() {
@@ -58,6 +59,8 @@ func run(parent context.Context) error {
 		shutdownErr = errors.Join(shutdownErr, server.Close())
 	}
 
+	shutdownErr = errors.Join(shutdownErr, application.Positions.Shutdown(shutdownCtx))
+	application.Push.Close()
 	if err := application.Telemetry.Shutdown(shutdownCtx); err != nil {
 		application.Logger.WarnContext(shutdownCtx, "shutdown telemetry", "error", err)
 	}
@@ -73,7 +76,7 @@ func run(parent context.Context) error {
 		return fmt.Errorf("shutdown timeout, forcing exit: %w", errors.Join(shutdownCtx.Err(), shutdownErr))
 	}
 	if shutdownErr != nil {
-		return fmt.Errorf("shutdown HTTP server: %w", shutdownErr)
+		return fmt.Errorf("shutdown service: %w", shutdownErr)
 	}
 
 	if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {

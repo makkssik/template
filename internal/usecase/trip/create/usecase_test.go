@@ -14,49 +14,49 @@ import (
 )
 
 func TestOperation(t *testing.T) {
-	const (
-		historyStage     = "history"
-		invalidStage     = "invalid"
-		repositoryStage  = "repository"
-		transactionStage = "transaction"
-	)
-	for _, stage := range []string{"success", repositoryStage, historyStage, transactionStage, invalidStage} {
-		t.Run(stage, func(t *testing.T) {
+	failure := errors.New("dependency failed")
+	tests := []struct {
+		name         string
+		invalidPrice bool
+		beginErr     error
+		createErr    error
+		historyErr   error
+		wantErr      error
+	}{
+		{name: "trip created"},
+		{name: "driver busy", createErr: trip.ErrDriverBusy, wantErr: trip.ErrDriverBusy},
+		{name: "history fails", historyErr: failure, wantErr: failure},
+		{name: "begin fails", beginErr: failure, wantErr: failure},
+		{name: "negative price", invalidPrice: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			repo := NewMocktripRepository(ctrl)
 			history := NewMockhistoryRepository(ctrl)
 			tx := NewMocktxManager(ctrl)
 			observer := NewMockevents(ctrl)
-			if stage == "success" {
+			if !tc.invalidPrice && tc.wantErr == nil {
 				observer.EXPECT().Created(gomock.Any(), gomock.Any())
 			}
-			failure := errors.New("dependency failed")
-			var wantErr error
 			var saved trip.Trip
 			input := create.Input{UserID: uuid.New(), DriverID: uuid.New(), Price: 10}
-			if stage == invalidStage {
+			if tc.invalidPrice {
 				input.Price = -1
 			} else {
 				tx.EXPECT().Do(gomock.Any(), gomock.Any()).DoAndReturn(func(ctx context.Context, fn func(context.Context) error) error {
-					if stage == transactionStage {
-						return failure
+					if tc.beginErr != nil {
+						return tc.beginErr
 					}
 					return fn(ctx)
 				})
-				if stage == transactionStage {
-					wantErr = failure
-				} else {
+				if tc.beginErr == nil {
 					repo.EXPECT().CreateTrip(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, v trip.Trip) error {
 						saved = v
 						assertCreationTimestamps(t, v)
-						if stage == repositoryStage {
-							return trip.ErrDriverBusy
-						}
-						return nil
+						return tc.createErr
 					})
-					if stage == repositoryStage {
-						wantErr = trip.ErrDriverBusy
-					} else {
+					if tc.createErr == nil {
 						history.EXPECT().RegisterStatusChange(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, change trip.StatusChange) error {
 							if change.TripID != saved.TripID || change.FromStatus != nil || change.ToStatus != trip.StatusActive {
 								t.Fatalf("expected initial transition to active, got %+v", change)
@@ -64,35 +64,29 @@ func TestOperation(t *testing.T) {
 							if saved.StartedAt.IsZero() || !change.ChangedAt.Equal(saved.StartedAt) {
 								t.Fatalf("history time %v differs from start time %v", change.ChangedAt, saved.StartedAt)
 							}
-							if stage == historyStage {
-								return failure
-							}
-							return nil
+							return tc.historyErr
 						})
-						if stage == historyStage {
-							wantErr = failure
-						}
 					}
 				}
 			}
 			got, err := create.New(repo, history, tx, observer).CreateTrip(context.Background(), input)
-			if stage == invalidStage {
+			if tc.invalidPrice {
 				var ve *trip.ValidationError
 				if !errors.As(err, &ve) {
 					t.Fatalf("validation: %v", err)
 				}
 				return
 			}
-			if !errors.Is(err, wantErr) {
-				t.Fatalf("got %v, want %v", err, wantErr)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("got %v, want %v", err, tc.wantErr)
 			}
-			if wantErr == nil && (got == nil || got.TripID != saved.TripID || got.UserID != input.UserID || got.DriverID != input.DriverID || got.Price != input.Price || got.Status != trip.StatusActive) {
+			if tc.wantErr == nil && (got == nil || got.TripID != saved.TripID || got.UserID != input.UserID || got.DriverID != input.DriverID || got.Price != input.Price || got.Status != trip.StatusActive) {
 				t.Fatal("missing result")
 			}
-			if wantErr != nil && got != nil {
+			if tc.wantErr != nil && got != nil {
 				t.Fatal("result returned after failure")
 			}
-			if wantErr == nil && got.StartedAt != saved.StartedAt {
+			if tc.wantErr == nil && got.StartedAt != saved.StartedAt {
 				t.Fatalf("response start time %v differs from saved time %v", got.StartedAt, saved.StartedAt)
 			}
 		})

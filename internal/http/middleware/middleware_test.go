@@ -53,7 +53,11 @@ func TestPanicRecorded(t *testing.T) {
 	}
 	var logs bytes.Buffer
 	logHandler := &contextLogHandler{Handler: slog.NewJSONHandler(&logs, nil), spans: make(map[string]trace.SpanContext)}
-	handler := chain(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") }), slog.New(logHandler), tp, metrics, func(*http.Request) string { return tripRoute })
+	handler := chain(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}), slog.New(logHandler), tp, metrics, func(*http.Request) string {
+		return tripRoute
+	})
 	r := httptest.NewRequest("GET", tripPath, nil)
 	r.Header.Set("traceparent", traceParent)
 	w := httptest.NewRecorder()
@@ -230,20 +234,58 @@ func assertHTTPSpan(t *testing.T, exporter *tracetest.InMemoryExporter, method, 
 
 func TestResponsesPreservedAndRecorded(t *testing.T) {
 	const createTripRoute = "/api/v1/trips"
-	for _, tc := range []struct {
+	tests := []struct {
 		status int
 		method string
 		route  string
 		path   string
 		body   string
 	}{
-		{http.StatusOK, http.MethodGet, tripRoute, tripPath, `{"status":"active"}`},
-		{http.StatusCreated, http.MethodPost, createTripRoute, createTripRoute, `{"status":"active"}`},
-		{http.StatusBadRequest, http.MethodPost, createTripRoute, createTripRoute, `{"code":"invalid_request"}`},
-		{http.StatusNotFound, http.MethodGet, tripRoute, tripPath, `{"code":"trip_not_found"}`},
-		{http.StatusConflict, http.MethodPost, tripRoute + "/finish", tripPath + "/finish", `{"code":"trip_completed"}`},
-		{http.StatusInternalServerError, http.MethodGet, tripRoute, tripPath, `{"code":"internal_error"}`},
-	} {
+		{
+			status: http.StatusOK,
+			method: http.MethodGet,
+			route:  tripRoute,
+			path:   tripPath,
+			body:   `{"status":"active"}`,
+		},
+		{
+			status: http.StatusCreated,
+			method: http.MethodPost,
+			route:  createTripRoute,
+			path:   createTripRoute,
+			body:   `{"status":"active"}`,
+		},
+		{
+			status: http.StatusBadRequest,
+			method: http.MethodPost,
+			route:  createTripRoute,
+			path:   createTripRoute,
+			body:   `{"code":"invalid_request"}`,
+		},
+		{
+			status: http.StatusNotFound,
+			method: http.MethodGet,
+			route:  tripRoute,
+			path:   tripPath,
+			body:   `{"code":"trip_not_found"}`,
+		},
+		{
+			status: http.StatusConflict,
+			method: http.MethodPost,
+			route:  tripRoute + "/finish",
+			path:   tripPath + "/finish",
+			body:   `{"code":"trip_completed"}`,
+		},
+		{
+			status: http.StatusInternalServerError,
+			method: http.MethodGet,
+			route:  tripRoute,
+			path:   tripPath,
+			body:   `{"code":"internal_error"}`,
+		},
+	}
+
+	for _, tc := range tests {
 		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
 			signals := newTestTelemetry(t)
 			metrics, err := middleware.NewMetrics(signals.meter.Meter("test"))
@@ -270,7 +312,9 @@ func TestResponsesPreservedAndRecorded(t *testing.T) {
 				}
 			})
 			var logs bytes.Buffer
-			handler := chain(endpoint, slog.New(slog.NewJSONHandler(&logs, nil)), signals.tracer, metrics, func(*http.Request) string { return tc.route })
+			handler := chain(endpoint, slog.New(slog.NewJSONHandler(&logs, nil)), signals.tracer, metrics, func(*http.Request) string {
+				return tc.route
+			})
 			r := httptest.NewRequest(tc.method, tc.path, nil)
 			r.Header.Set("traceparent", traceParent)
 			w := httptest.NewRecorder()
@@ -297,13 +341,19 @@ func TestActiveRequestsWhileHandlerRuns(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan struct{})
 	var releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	unblock := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
 	endpoint := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		close(entered)
 		<-release
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := chain(endpoint, slog.New(slog.NewJSONHandler(io.Discard, nil)), signals.tracer, metrics, func(*http.Request) string { return tripRoute })
+	handler := chain(endpoint, slog.New(slog.NewJSONHandler(io.Discard, nil)), signals.tracer, metrics, func(*http.Request) string {
+		return tripRoute
+	})
 	w := httptest.NewRecorder()
 	t.Cleanup(func() {
 		unblock()
@@ -330,51 +380,48 @@ func chain(next http.Handler, logger *slog.Logger, tp trace.TracerProvider, metr
 }
 
 func TestMiddlewareWorksIndependently(t *testing.T) {
-	const (
-		loggingMiddleware = "logging"
-		metricsMiddleware = "metrics"
-		tracingMiddleware = "tracing"
-	)
-	for _, name := range []string{loggingMiddleware, metricsMiddleware, tracingMiddleware, "recover"} {
-		t.Run(name, func(t *testing.T) {
-			signals := newTestTelemetry(t)
-			metrics, err := middleware.NewMetrics(signals.meter.Meter("test"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var logs bytes.Buffer
-			logger := slog.New(slog.NewJSONHandler(&logs, nil))
-			route := func(*http.Request) string { return tripRoute }
-			var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusCreated)
-			})
-			switch name {
-			case loggingMiddleware:
-				handler = middleware.Logging(handler, logger, route)
-			case metricsMiddleware:
-				handler = middleware.Metrics(handler, metrics, route)
-			case tracingMiddleware:
-				handler = middleware.Tracing(handler, signals.tracer, route)
-			case "recover":
-				handler = middleware.Recover(handler, logger)
-			}
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, tripPath, nil)
-			r.Header.Set("traceparent", traceParent)
-			handler.ServeHTTP(w, r)
-			if w.Code != http.StatusCreated {
-				t.Fatalf("status: got %d, want 201", w.Code)
-			}
-			switch name {
-			case loggingMiddleware:
-				assertAccessLog(t, &logs, http.MethodPost, tripRoute, http.StatusCreated)
-			case metricsMiddleware:
-				collected := collectMetrics(t, signals.reader)
-				assertRequestDuration(t, collected, http.MethodPost, tripRoute, http.StatusCreated)
-				assertActiveRequests(t, collected, http.MethodPost, tripRoute, 0)
-			case tracingMiddleware:
-				assertHTTPSpan(t, signals.exporter, http.MethodPost, tripRoute, http.StatusCreated)
-			}
-		})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	route := func(*http.Request) string { return tripRoute }
+
+	serve := func(t *testing.T, handler http.Handler) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, tripPath, nil)
+		request.Header.Set("traceparent", traceParent)
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("status: got %d, want %d", response.Code, http.StatusCreated)
+		}
 	}
+
+	t.Run("logging", func(t *testing.T) {
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&logs, nil))
+		serve(t, middleware.Logging(next, logger, route))
+		assertAccessLog(t, &logs, http.MethodPost, tripRoute, http.StatusCreated)
+	})
+
+	t.Run("metrics", func(t *testing.T) {
+		signals := newTestTelemetry(t)
+		metrics, err := middleware.NewMetrics(signals.meter.Meter("test"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		serve(t, middleware.Metrics(next, metrics, route))
+		collected := collectMetrics(t, signals.reader)
+		assertRequestDuration(t, collected, http.MethodPost, tripRoute, http.StatusCreated)
+		assertActiveRequests(t, collected, http.MethodPost, tripRoute, 0)
+	})
+
+	t.Run("tracing", func(t *testing.T) {
+		signals := newTestTelemetry(t)
+		serve(t, middleware.Tracing(next, signals.tracer, route))
+		assertHTTPSpan(t, signals.exporter, http.MethodPost, tripRoute, http.StatusCreated)
+	})
+
+	t.Run("recover", func(t *testing.T) {
+		serve(t, middleware.Recover(next, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	})
 }

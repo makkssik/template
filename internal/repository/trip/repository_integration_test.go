@@ -89,7 +89,9 @@ func newTrip() domaintrip.Trip {
 
 type creationRecorder struct{ tripID uuid.UUID }
 
-func (r *creationRecorder) Created(_ context.Context, id uuid.UUID) { r.tripID = id }
+func (r *creationRecorder) Created(_ context.Context, id uuid.UUID) {
+	r.tripID = id
+}
 
 func TestCreateTimestampsRoundTrip(t *testing.T) {
 	pool := database(t, nil)
@@ -128,36 +130,45 @@ func TestAtomicityAndNestedTransaction(t *testing.T) {
 	historyRepo := history.NewPostgresqlRepository(pool, 5*time.Second)
 	tx := postgres.NewTxManager(pool, 5*time.Second)
 	ctx := context.Background()
-	for _, panics := range []bool{false, true} {
-		value := newTrip()
-		func() {
-			defer func() {
-				v := recover()
-				if panics && v == nil {
-					t.Error("panic swallowed")
-				}
-				if !panics && v != nil {
-					t.Errorf("unexpected panic %v", v)
+	tests := []struct {
+		name   string
+		panics bool
+	}{
+		{name: "rollback after history error"},
+		{name: "rollback after panic", panics: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			value := newTrip()
+			func() {
+				defer func() {
+					v := recover()
+					if tc.panics && v == nil {
+						t.Error("panic swallowed")
+					}
+					if !tc.panics && v != nil {
+						t.Errorf("unexpected panic %v", v)
+					}
+				}()
+				err := tx.Do(ctx, func(ctx context.Context) error {
+					if err := repo.CreateTrip(ctx, value); err != nil {
+						return err
+					}
+					return tx.Do(ctx, func(ctx context.Context) error {
+						if tc.panics {
+							panic("rollback")
+						}
+						return historyRepo.RegisterStatusChange(ctx, domaintrip.StatusChange{TripID: value.TripID, ToStatus: domaintrip.Status("invalid"), ChangedAt: time.Now()})
+					})
+				})
+				if err == nil {
+					t.Error("expected failure")
 				}
 			}()
-			err := tx.Do(ctx, func(ctx context.Context) error {
-				if err := repo.CreateTrip(ctx, value); err != nil {
-					return err
-				}
-				return tx.Do(ctx, func(ctx context.Context) error {
-					if panics {
-						panic("rollback")
-					}
-					return historyRepo.RegisterStatusChange(ctx, domaintrip.StatusChange{TripID: value.TripID, ToStatus: domaintrip.Status("invalid"), ChangedAt: time.Now()})
-				})
-			})
-			if err == nil {
-				t.Error("expected failure")
+			if _, err := repo.GetTripByID(ctx, value.TripID); !errors.Is(err, domaintrip.ErrTripNotFound) {
+				t.Fatalf("trip survived rollback: %v", err)
 			}
-		}()
-		if _, err := repo.GetTripByID(ctx, value.TripID); !errors.Is(err, domaintrip.ErrTripNotFound) {
-			t.Fatalf("trip survived rollback: %v", err)
-		}
+		})
 	}
 	value := newTrip()
 	if err := tx.Do(ctx, func(ctx context.Context) error {
@@ -189,7 +200,10 @@ func TestConcurrentCreateAndFinish(t *testing.T) {
 		var wg sync.WaitGroup
 		start := make(chan struct{})
 		for range 20 {
-			wg.Go(func() { <-start; fn() })
+			wg.Go(func() {
+				<-start
+				fn()
+			})
 		}
 		close(start)
 		wg.Wait()
@@ -277,7 +291,8 @@ func (r *queryRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data p
 	return ctx
 }
 
-func (*queryRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+func (*queryRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
+}
 
 func (r *queryRecorder) reset() {
 	r.mu.Lock()
@@ -303,11 +318,15 @@ func (r *queryRecorder) statements() []string {
 
 type completionRecorder struct{ tripID uuid.UUID }
 
-func (r *completionRecorder) Completed(_ context.Context, id uuid.UUID) { r.tripID = id }
+func (r *completionRecorder) Completed(_ context.Context, id uuid.UUID) {
+	r.tripID = id
+}
 
 type completionCounter struct{ count atomic.Int32 }
 
-func (r *completionCounter) Completed(context.Context, uuid.UUID) { r.count.Add(1) }
+func (r *completionCounter) Completed(context.Context, uuid.UUID) {
+	r.count.Add(1)
+}
 
 func TestFinishLocksAndSavesTrip(t *testing.T) {
 	queries := &queryRecorder{}
@@ -370,7 +389,6 @@ func TestFinishRollbackAndConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// This constraint exists only in the temporary schema and makes the history INSERT fail after the UPDATE.
 	if _, err := pool.Exec(ctx, "ALTER TABLE trip_status_history ADD CONSTRAINT reject_completed CHECK (to_status <> 'completed')"); err != nil {
 		t.Fatal(err)
 	}

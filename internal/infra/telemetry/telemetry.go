@@ -129,3 +129,18 @@ func (e *TripEvents) Completed(ctx context.Context, id uuid.UUID) {
 	e.completed.Add(ctx, 1)
 	e.logger.InfoContext(ctx, "trip completed", "trip_id", id)
 }
+
+type PositionEvents struct {
+	saved  metric.Int64Counter
+	logger *slog.Logger
+}
+
+func NewPositionEvents(meter metric.Meter, logger *slog.Logger) (*PositionEvents, error) {
+	c, err := meter.Int64Counter("tripgo.positions.saved")
+	return &PositionEvents{saved: c, logger: logger}, err
+}
+
+func (e *PositionEvents) Saved(ctx context.Context, id uuid.UUID) {
+	e.saved.Add(ctx, 1)
+	e.logger.DebugContext(ctx, "position saved", "trip_id", id)
+}

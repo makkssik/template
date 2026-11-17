@@ -22,21 +22,63 @@ import (
 
 func TestProblemResponseSpanStatus(t *testing.T) {
 	const invalidRequestCode = "invalid_request"
-	for _, tc := range []struct {
+	tests := []struct {
 		name       string
 		err        error
-		status     int
-		code       string
+		wantStatus int
+		wantCode   string
 		spanStatus codes.Code
 	}{
-		{"validation", &trip.ValidationError{Field: "price", Detail: "negative"}, http.StatusBadRequest, invalidRequestCode, codes.Unset},
-		{"not found", trip.ErrTripNotFound, http.StatusNotFound, "trip_not_found", codes.Unset},
-		{"completed", trip.ErrTripCompleted, http.StatusConflict, "trip_completed", codes.Unset},
-		{"busy", trip.ErrDriverBusy, http.StatusConflict, "driver_busy", codes.Unset},
-		{"internal", errors.New("database unavailable"), http.StatusInternalServerError, "internal_error", codes.Error},
-		{"explicit client error", nil, http.StatusBadRequest, invalidRequestCode, codes.Unset},
-		{"explicit server error", nil, http.StatusServiceUnavailable, "service_unavailable", codes.Error},
-	} {
+		{
+			name:       "validation",
+			err:        &trip.ValidationError{Field: "price", Detail: "negative"},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   invalidRequestCode,
+			spanStatus: codes.Unset,
+		},
+		{
+			name:       "not found",
+			err:        trip.ErrTripNotFound,
+			wantStatus: http.StatusNotFound,
+			wantCode:   "trip_not_found",
+			spanStatus: codes.Unset,
+		},
+		{
+			name:       "completed",
+			err:        trip.ErrTripCompleted,
+			wantStatus: http.StatusConflict,
+			wantCode:   "trip_completed",
+			spanStatus: codes.Unset,
+		},
+		{
+			name:       "busy",
+			err:        trip.ErrDriverBusy,
+			wantStatus: http.StatusConflict,
+			wantCode:   "driver_busy",
+			spanStatus: codes.Unset,
+		},
+		{
+			name:       "internal",
+			err:        errors.New("database unavailable"),
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "internal_error",
+			spanStatus: codes.Error,
+		},
+		{
+			name:       "explicit client error",
+			wantStatus: http.StatusBadRequest,
+			wantCode:   invalidRequestCode,
+			spanStatus: codes.Unset,
+		},
+		{
+			name:       "explicit server error",
+			wantStatus: http.StatusServiceUnavailable,
+			wantCode:   "service_unavailable",
+			spanStatus: codes.Error,
+		},
+	}
+
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := tracetest.NewSpanRecorder()
 			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
@@ -52,14 +94,14 @@ func TestProblemResponseSpanStatus(t *testing.T) {
 			if tc.err != nil {
 				domainerror.ServiceError(logger, response, request, tc.err)
 			} else {
-				domainerror.WriteProblem(logger, response, request, tc.status, tc.code, http.StatusText(tc.status), "test detail")
+				domainerror.WriteProblem(logger, response, request, tc.wantStatus, tc.wantCode, http.StatusText(tc.wantStatus), "test detail")
 			}
 			span.End()
 			var problem api.Problem
 			if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
 				t.Fatal(err)
 			}
-			if response.Code != tc.status || int(problem.Status) != tc.status || problem.Code != tc.code || response.Header().Get("Content-Type") != "application/problem+json" {
+			if response.Code != tc.wantStatus || int(problem.Status) != tc.wantStatus || problem.Code != tc.wantCode || response.Header().Get("Content-Type") != "application/problem+json" {
 				t.Fatalf("unexpected HTTP response: status=%d problem=%+v headers=%v", response.Code, problem, response.Header())
 			}
 			spans := recorder.Ended()
@@ -72,8 +114,8 @@ func TestProblemResponseSpanStatus(t *testing.T) {
 			attrs := attribute.NewSet(spans[0].Attributes()...)
 			errorType, exists := attrs.Value("error.type")
 			if tc.spanStatus == codes.Error {
-				if !exists || errorType.AsString() != tc.code {
-					t.Errorf("error.type: got %v, want %s", errorType, tc.code)
+				if !exists || errorType.AsString() != tc.wantCode {
+					t.Errorf("error.type: got %v, want %s", errorType, tc.wantCode)
 				}
 			} else if exists {
 				t.Errorf("client error must not set error.type: %v", errorType)

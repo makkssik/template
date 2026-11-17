@@ -12,6 +12,16 @@ import (
 )
 
 type Config struct {
+	PositionCheckInterval time.Duration `env:"POSITION_CHECK_INTERVAL" env-default:"30s" validate:"gt=0"`
+	PositionStaleAfter    time.Duration `env:"POSITION_STALE_AFTER" env-default:"60s" validate:"gt=0"`
+	PositionWorkers       int           `env:"POSITION_WORKERS" env-default:"4" validate:"gt=0"`
+	PositionQueueSize     int           `env:"POSITION_QUEUE_SIZE" env-default:"100" validate:"gt=0"`
+	PositionBatchSize     int           `env:"POSITION_SCAN_BATCH_SIZE" env-default:"100" validate:"gt=0"`
+	PushHTTPURL           string        `env:"PUSH_HTTP_URL" env-required:"true" validate:"required,http_url"`
+	PushRequestTimeout    time.Duration `env:"PUSH_REQUEST_TIMEOUT" env-default:"1s" validate:"gt=0"`
+	PushKeepAlive         time.Duration `env:"PUSH_KEEP_ALIVE" env-default:"30s" validate:"gt=0"`
+	PushIdleConnTimeout   time.Duration `env:"PUSH_IDLE_CONN_TIMEOUT" env-default:"90s" validate:"gt=0"`
+
 	OTELServiceName string `env:"OTEL_SERVICE_NAME" env-required:"true" validate:"required"`
 	OTELEndpoint    string `env:"OTEL_EXPORTER_OTLP_ENDPOINT" env-required:"true" validate:"required"`
 	OTELProtocol    string `env:"OTEL_EXPORTER_OTLP_PROTOCOL" env-required:"true" validate:"oneof=grpc http/protobuf"`
@@ -57,9 +67,6 @@ func (c Config) Validate() error {
 	if portNumber < 1 || portNumber > 65535 {
 		return fmt.Errorf("HTTP_ADDR port must be between 1 and 65535")
 	}
-
-	// Validate a copy so whitespace-only database settings are rejected without
-	// modifying the connection string passed to pgx.
 	c.DatabaseURL = strings.TrimSpace(c.DatabaseURL)
 	c.LogLevel = strings.ToLower(c.LogLevel)
 	validate := validator.New(validator.WithRequiredStructEnabled())

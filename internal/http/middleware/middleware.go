@@ -60,7 +60,6 @@ func Recover(next http.Handler, logger *slog.Logger) http.Handler {
 
 func Tracing(next http.Handler, tp trace.TracerProvider, route func(*http.Request) string) http.Handler {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Recover runs outside otelhttp, so keep the span context for its panic log.
 		if recovery, ok := r.Context().Value(recoveryContextKey{}).(*recoveryContext); ok {
 			recovery.ctx = r.Context()
 		}

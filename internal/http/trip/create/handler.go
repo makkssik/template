@@ -24,7 +24,11 @@ import (
 
 func (h *Handler) CreateTrip(w http.ResponseWriter, r *http.Request, _ api.CreateTripParams) {
 	var request api.CreateTripJSONRequestBody
-	if err := validateCreateTripRequest(r, &request); err != nil {
+	if err := decodeCreateTripRequest(r, &request); err != nil {
+		domainerror.WriteProblem(h.logger, w, r, http.StatusBadRequest, "invalid_request", "Invalid request", err.Error())
+		return
+	}
+	if err := validateCreateTripRequest(request); err != nil {
 		domainerror.WriteProblem(h.logger, w, r, http.StatusBadRequest, "invalid_request", "Invalid request", err.Error())
 		return
 	}
@@ -55,10 +59,7 @@ func (h *Handler) CreateTrip(w http.ResponseWriter, r *http.Request, _ api.Creat
 	}
 }
 
-func validateCreateTripRequest(r *http.Request, request *api.CreateTripJSONRequestBody) error {
-	if err := decodeCreateTripRequest(r, request); err != nil {
-		return err
-	}
+func validateCreateTripRequest(request api.CreateTripJSONRequestBody) error {
 	if request.UserId == uuid.Nil || request.DriverId == uuid.Nil {
 		return errors.New("user_id and driver_id must be non-zero UUIDs")
 	}
@@ -71,7 +72,7 @@ func validateCreateTripRequest(r *http.Request, request *api.CreateTripJSONReque
 		)
 	})
 
-	return validation.ValidateStruct(request,
+	return validation.ValidateStruct(&request,
 		validation.Field(&request.UserId, validation.Required, is.UUID),
 		validation.Field(&request.DriverId, validation.Required, is.UUID),
 		validation.Field(&request.StartPoint, coordinates),

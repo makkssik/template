@@ -10,14 +10,20 @@ func TestDBToDomainTimestamps(t *testing.T) {
 	zone := time.FixedZone("UTC+3", 3*60*60)
 	started := time.Date(2026, 11, 15, 17, 37, 13, 494127000, zone)
 	finished := started.Add(10 * time.Minute)
-	for _, tc := range []struct {
+	tests := []struct {
 		name       string
 		finishedAt *time.Time
 		wantJSON   string
 	}{
-		{"active", nil, "null"},
-		{"completed", &finished, `"2026-11-15T14:47:13.494127Z"`},
-	} {
+		{name: "active", wantJSON: "null"},
+		{
+			name:       "completed",
+			finishedAt: &finished,
+			wantJSON:   `"2026-11-15T14:47:13.494127Z"`,
+		},
+	}
+
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := dbToDomain(Trip{
 				StartedAt: started, CreatedAt: started, UpdatedAt: started,

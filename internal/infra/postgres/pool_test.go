@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -15,14 +16,22 @@ import (
 )
 
 func TestInvalidDatabaseConfigDoesNotExposeCredentials(t *testing.T) {
-	for _, dsn := range []string{
-		"postgres://audit-user@localhost/audit?password=audit-secret&sslmode=invalid",
-		"postgres://audit-user:audit-secret@localhost/audit?sslmode=invalid",
-		"host=localhost password=audit-secret sslmode=invalid",
-		"host=localhost password='audit-secret",
-	} {
-		t.Run(dsn, func(t *testing.T) {
-			poolConfig, err := postgres.NewPoolConfig(config.Config{DatabaseURL: dsn}, nil)
+	authURL := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword("audit-user", "audit-secret"),
+		Host:     "localhost",
+		Path:     "/audit",
+		RawQuery: "sslmode=invalid",
+	}
+	tests := []struct{ name, dsn string }{
+		{name: "password in query", dsn: "postgres://audit-user@localhost/audit?password=audit-secret&sslmode=invalid"},
+		{name: "password in URL", dsn: authURL.String()},
+		{name: "password in connection parameters", dsn: "host=localhost password=audit-secret sslmode=invalid"},
+		{name: "unterminated quoted password", dsn: "host=localhost password='audit-secret"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			poolConfig, err := postgres.NewPoolConfig(config.Config{DatabaseURL: tc.dsn}, nil)
 			if poolConfig != nil {
 				t.Fatal("invalid config returned pool settings")
 			}

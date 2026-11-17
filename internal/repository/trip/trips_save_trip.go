@@ -13,7 +13,6 @@ import (
 	"github.com/makkssik/template/internal/infra/postgres"
 )
 
-// SaveTrip persists lifecycle fields after the trip has been locked with GetTripForUpdate.
 func (t *tripsRepository) SaveTrip(ctx context.Context, trip trips.Trip) (*trips.Trip, error) {
 	ctx, cancel := context.WithTimeout(ctx, t.queryTimeout)
 	defer cancel()

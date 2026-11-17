@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -21,22 +22,75 @@ import (
 
 func TestHandler(t *testing.T) {
 	const invalidRequestCode = "invalid_request"
-	body := `{"user_id":"5cb72c04-7650-45c9-a79b-bcdba0631e0c","driver_id":"8860b315-ec86-42eb-a17c-7c163d721ff5","start_point":{"latitude":59.9398,"longitude":30.3146},"end_point":{"latitude":59.929,"longitude":30.3626},"price":1450}`
-	for _, tc := range []struct {
-		name, body string
+	const tripFields = `{
+  "user_id": "5cb72c04-7650-45c9-a79b-bcdba0631e0c",
+  "driver_id": "8860b315-ec86-42eb-a17c-7c163d721ff5",
+  "start_point": {"latitude": 59.9398, "longitude": 30.3146},
+  "end_point": {"latitude": 59.929, "longitude": 30.3626}`
+	const body = tripFields + `,"price":1450}`
+	tests := []struct {
+		name       string
+		body       string
 		err        error
-		status     int
-		code       string
+		wantStatus int
+		wantCode   string
+		wantPrice  int64
 	}{
-		{"success", body, nil, 201, ""},
-		{"zero price", strings.Replace(body, `"price":1450`, `"price":0`, 1), nil, 201, ""},
-		{"busy", body, trip.ErrDriverBusy, 409, "driver_busy"},
-		{"failure", body, errors.New("secret SQL"), 500, "internal_error"},
-		{"invalid", `{}`, nil, 400, invalidRequestCode},
-		{"unknown", strings.Replace(body, `"price":1450`, `"price":1450,"extra":1`, 1), nil, 400, invalidRequestCode},
-		{"missing price", strings.Replace(body, `,"price":1450`, "", 1), nil, 400, invalidRequestCode},
-		{"negative", strings.Replace(body, `"price":1450`, `"price":-1`, 1), nil, 400, invalidRequestCode},
-	} {
+		{
+			name:       "success",
+			body:       body,
+			wantStatus: http.StatusCreated,
+			wantPrice:  1450,
+		},
+		{
+			name:       "zero price",
+			body:       tripFields + `,"price":0}`,
+			wantStatus: http.StatusCreated,
+			wantPrice:  0,
+		},
+		{
+			name:       "busy",
+			body:       body,
+			err:        trip.ErrDriverBusy,
+			wantStatus: http.StatusConflict,
+			wantCode:   "driver_busy",
+			wantPrice:  1450,
+		},
+		{
+			name:       "failure",
+			body:       body,
+			err:        errors.New("secret SQL"),
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "internal_error",
+			wantPrice:  1450,
+		},
+		{
+			name:       "invalid",
+			body:       `{}`,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   invalidRequestCode,
+		},
+		{
+			name:       "unknown",
+			body:       tripFields + `,"price":1450,"extra":1}`,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   invalidRequestCode,
+		},
+		{
+			name:       "missing price",
+			body:       tripFields + "}",
+			wantStatus: http.StatusBadRequest,
+			wantCode:   invalidRequestCode,
+		},
+		{
+			name:       "negative",
+			body:       tripFields + `,"price":-1}`,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   invalidRequestCode,
+		},
+	}
+
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			usecase := NewMocktripUsecase(ctrl)
@@ -46,13 +100,10 @@ func TestHandler(t *testing.T) {
 				DriverID:   uuid.MustParse("8860b315-ec86-42eb-a17c-7c163d721ff5"),
 				StartPoint: trip.Coordinates{Latitude: 59.9398, Longitude: 30.3146},
 				EndPoint:   trip.Coordinates{Latitude: 59.929, Longitude: 30.3626},
-				Price:      1450,
-			}
-			if tc.name == "zero price" {
-				input.Price = 0
+				Price:      tc.wantPrice,
 			}
 			started := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
-			if tc.status != 400 {
+			if tc.wantStatus != http.StatusBadRequest {
 				usecase.EXPECT().CreateTrip(gomock.Any(), input).Return(&trip.Trip{
 					TripID: id, UserID: input.UserID, DriverID: input.DriverID,
 					StartPoint: input.StartPoint, EndPoint: input.EndPoint, Price: input.Price,
@@ -64,21 +115,21 @@ func TestHandler(t *testing.T) {
 			r.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 			h.CreateTrip(w, r, api.CreateTripParams{})
-			if w.Code != tc.status {
+			if w.Code != tc.wantStatus {
 				t.Fatalf("status %d: %s", w.Code, w.Body)
 			}
 			if strings.Contains(w.Body.String(), "secret") {
 				t.Fatal("internal error leaked")
 			}
-			if tc.status == 201 && w.Header().Get("Location") != "/api/v1/trips/"+id.String() {
+			if tc.wantStatus == http.StatusCreated && w.Header().Get("Location") != "/api/v1/trips/"+id.String() {
 				t.Fatal("wrong location")
 			}
-			if tc.code != "" {
+			if tc.wantCode != "" {
 				var problem api.Problem
 				if err := json.Unmarshal(w.Body.Bytes(), &problem); err != nil {
 					t.Fatal(err)
 				}
-				if w.Header().Get("Content-Type") != "application/problem+json" || problem.Code != tc.code || int(problem.Status) != tc.status || problem.Instance == nil || *problem.Instance != r.URL.Path {
+				if w.Header().Get("Content-Type") != "application/problem+json" || problem.Code != tc.wantCode || int(problem.Status) != tc.wantStatus || problem.Instance == nil || *problem.Instance != r.URL.Path {
 					t.Fatalf("unexpected problem: %+v, headers: %v", problem, w.Header())
 				}
 				return

@@ -12,13 +12,15 @@ import (
 )
 
 func TestCheck(t *testing.T) {
-	for _, tc := range []struct {
+	tests := []struct {
 		name    string
 		failure error
 	}{
-		{"ready", nil},
-		{"unavailable", errors.New("database unavailable")},
-	} {
+		{name: "ready"},
+		{name: "unavailable", failure: errors.New("database unavailable")},
+	}
+
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			failure := tc.failure
 			database := NewMockdatabasePinger(gomock.NewController(t))

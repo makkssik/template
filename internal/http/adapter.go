@@ -25,3 +25,11 @@ func (i *Implementation) Health(w http.ResponseWriter, r *http.Request) {
 func (i *Implementation) Ready(w http.ResponseWriter, r *http.Request) {
 	i.readyHandler.Ready(w, r)
 }
+
+func (i *Implementation) CreateTripPosition(w http.ResponseWriter, r *http.Request, id api.TripId) {
+	i.positionCreate.CreateTripPosition(w, r, id)
+}
+
+func (i *Implementation) ListTripPositions(w http.ResponseWriter, r *http.Request, id api.TripId) {
+	i.positionList.ListTripPositions(w, r, id)
+}

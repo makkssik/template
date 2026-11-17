@@ -24,12 +24,12 @@ func NewPoolConfig(cfg config.Config, tracer pgx.QueryTracer) (*pgxpool.Config, 
 	return poolConfig, nil
 }
 
-// ParseConfig errors may contain credentials, including passwords in URL query
-// parameters. Keep the cause for errors.Is/As without printing the connection string.
 type databaseConfigError struct{ cause error }
 
 func (*databaseConfigError) Error() string {
 	return "invalid DATABASE_URL (connection string omitted)"
 }
 
-func (e *databaseConfigError) Unwrap() error { return e.cause }
+func (e *databaseConfigError) Unwrap() error {
+	return e.cause
+}

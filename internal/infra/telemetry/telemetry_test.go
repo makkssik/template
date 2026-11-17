@@ -89,7 +89,9 @@ func TestOTLPExportOnShutdown(t *testing.T) {
 	t.Setenv("OTEL_METRIC_EXPORT_INTERVAL", "60000")
 	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "service.namespace=tripgo,deployment.environment=local,service.version=test")
 	previousHandler := otel.GetErrorHandler()
-	t.Cleanup(func() { otel.SetErrorHandler(previousHandler) })
+	t.Cleanup(func() {
+		otel.SetErrorHandler(previousHandler)
+	})
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	signals, err := New(t.Context(), "http/protobuf", "trip-service", logger)
 	if err != nil {

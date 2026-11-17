@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -19,16 +20,28 @@ import (
 )
 
 func TestHandler(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		err    error
-		status int
-		code   string
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
 	}{
-		{"success", nil, 200, ""},
-		{"missing", trip.ErrTripNotFound, 404, "trip_not_found"},
-		{"failure", errors.New("secret SQL"), 500, "internal_error"},
-	} {
+		{name: "success", wantStatus: http.StatusOK},
+		{
+			name:       "missing",
+			err:        trip.ErrTripNotFound,
+			wantStatus: http.StatusNotFound,
+			wantCode:   "trip_not_found",
+		},
+		{
+			name:       "failure",
+			err:        errors.New("secret SQL"),
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "internal_error",
+		},
+	}
+
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			usecase := NewMocktripUsecase(ctrl)
@@ -44,18 +57,18 @@ func TestHandler(t *testing.T) {
 			r := httptest.NewRequest("GET", "/api/v1/trips/"+id.String(), nil)
 			w := httptest.NewRecorder()
 			h.GetTrip(w, r, id)
-			if w.Code != tc.status {
+			if w.Code != tc.wantStatus {
 				t.Fatalf("status %d: %s", w.Code, w.Body)
 			}
 			if strings.Contains(w.Body.String(), "secret") {
 				t.Fatal("internal error leaked")
 			}
-			if tc.code != "" {
+			if tc.wantCode != "" {
 				var problem api.Problem
 				if err := json.Unmarshal(w.Body.Bytes(), &problem); err != nil {
 					t.Fatal(err)
 				}
-				if w.Header().Get("Content-Type") != "application/problem+json" || problem.Code != tc.code || int(problem.Status) != tc.status || problem.Instance == nil || *problem.Instance != r.URL.Path {
+				if w.Header().Get("Content-Type") != "application/problem+json" || problem.Code != tc.wantCode || int(problem.Status) != tc.wantStatus || problem.Instance == nil || *problem.Instance != r.URL.Path {
 					t.Fatalf("unexpected problem: %+v, headers: %v", problem, w.Header())
 				}
 				return
